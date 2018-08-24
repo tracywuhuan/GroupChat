@@ -16,17 +16,19 @@ import (
 )
 
 type UserInfo struct {
-	Username string
-	Message  string
+	UserID    int
+	Username  string
+	Handshake string
+	Message   string
 }
 
 //!+broadcaster
-type client chan<- string // an outgoing message channel
+type client chan<- []byte // an outgoing message channel
 
 var (
 	entering = make(chan client)
 	leaving  = make(chan client)
-	messages = make(chan string) // all incoming client messages
+	messages = make(chan []byte) // all incoming client messages
 )
 
 func broadcaster() {
@@ -54,7 +56,7 @@ func broadcaster() {
 
 //!+handleConn
 func handleConn(conn net.Conn) {
-	ch := make(chan string) // outgoing client messages
+	ch := make(chan []byte) // outgoing client messages
 	go clientWriter(conn, ch)
 
 	who := conn.RemoteAddr().String()
@@ -70,28 +72,45 @@ func handleConn(conn net.Conn) {
 		var userinfo UserInfo
 		json.Unmarshal(tmpBuffer, &userinfo)
 		who = userinfo.Username
-		if userinfo.Message == "" {
-			ch <- "You are " + who
-			messages <- who + " has arrived"
+		if userinfo.Handshake == "Hello" {
+			var userinfoOut UserInfo
+			userinfoOut.Message = "<<<<Broadcast>>>>  You are " + who
+			userinfoOut.Username = ""
+			buffer, _ := json.Marshal(userinfoOut)
+			ch <- protocol.Packet(buffer)
+
+			userinfoOut.Message = "<<<<Broadcast>>>>  " + who + " has arrived"
+			userinfoOut.Username = who
+			buffer, _ = json.Marshal(userinfoOut)
+			messages <- protocol.Packet(buffer)
+
 			entering <- ch
 		} else {
-			if userinfo.Message == "quit" {
+			if userinfo.Handshake == "quit" {
 				break
 			} else {
-				messages <- who + ": " + userinfo.Message
+				var userinfoOut UserInfo
+				userinfoOut.Message = who + " : " + userinfo.Message
+				userinfoOut.Username = who
+				buffer, _ := json.Marshal(userinfoOut)
+				messages <- protocol.Packet(buffer)
 			}
 		}
 	}
 	// NOTE: ignoring potential errors from input.Err()
 
 	leaving <- ch
-	messages <- who + " has left"
+	var userinfoOut UserInfo
+	userinfoOut.Message = who + " has left"
+	userinfoOut.Username = who
+	buffer, _ = json.Marshal(userinfoOut)
+	messages <- protocol.Packet(buffer)
 	conn.Close()
 }
 
-func clientWriter(conn net.Conn, ch <-chan string) {
+func clientWriter(conn net.Conn, ch <-chan []byte) {
 	for msg := range ch {
-		fmt.Fprintln(conn, msg) // NOTE: ignoring network errors
+		conn.Write(msg) // NOTE: ignoring network errors
 	}
 }
 
@@ -115,6 +134,7 @@ func main() {
 		go handleConn(conn)
 	}
 }
+
 func Log(v ...interface{}) {
 	fmt.Println(v...)
 }
